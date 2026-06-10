@@ -14,7 +14,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
 
 
 DEFAULT_GRAPH_PATH = ".testradar/graph.msgpack"
-DEFAULT_TEST_FILE_PATTERNS = ("test_*.py", "*_test.py")
+DEFAULT_TEST_FILE_PATTERNS = ("tests.py", "test_*.py", "*_test.py", "*_tests.py")
 DEFAULT_LOCKFILE_PATTERNS = (
     "poetry.lock",
     "Pipfile.lock",

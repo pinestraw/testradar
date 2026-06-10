@@ -15,7 +15,7 @@ def test_load_config_uses_defaults_without_pyproject(tmp_path: Path):
     assert config.graph_path == (tmp_path / ".testradar/graph.msgpack").resolve()
     assert config.git_dir is None
     assert config.git_work_tree is None
-    assert config.test_file_patterns == ("test_*.py", "*_test.py")
+    assert config.test_file_patterns == ("tests.py", "test_*.py", "*_test.py", "*_tests.py")
     assert ".coverage*" in config.ignored_path_patterns
 
 
