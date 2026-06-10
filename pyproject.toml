@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "testradar"
+version = "0.1.0"
+description = "Framework-agnostic test impact analysis for pytest"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+  { name = "Pinestraw" },
+]
+dependencies = [
+  "msgpack>=1.0.8",
+  "typing-extensions>=4.10; python_version < '3.11'",
+  "tomli>=2.0.1; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+cov = [
+  "coverage>=7",
+]
+django = []
+dev = [
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "ruff>=0.12",
+]
+
+[project.scripts]
+testradar = "testradar.cli:main"
+
+[project.entry-points.pytest11]
+testradar = "testradar.pytest_plugin"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/testradar"]
+
+[tool.pytest.ini_options]
+addopts = "--cov=src/testradar --cov-report=term-missing --cov-fail-under=95"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.testradar]
+base_ref = "origin/main"
+source_roots = ["."]
+graph_path = ".testradar/graph.msgpack"

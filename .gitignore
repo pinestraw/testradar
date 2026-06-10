@@ -1,0 +1,9 @@
+.pytest_cache/
+.ruff_cache/
+.venv/
+.testradar/
+build/
+dist/
+*.egg-info/
+__pycache__/
+.coverage
