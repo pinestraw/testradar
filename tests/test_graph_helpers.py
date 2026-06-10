@@ -134,6 +134,27 @@ def test_update_graph_incremental_rebuilds_for_version_and_source_root_changes(r
     assert rebuilt_roots.source_roots == snapshot.source_roots
 
 
+def test_update_graph_incremental_rebuilds_for_config_fingerprint_changes(repo):
+    repo.write("app/__init__.py", "")
+    repo.write("app/service.py", "VALUE = 1\n")
+    repo.write("tests/test_service.py", "from app import service\n\ndef test_value():\n    assert service.VALUE == 1\n")
+    repo.commit_all()
+    snapshot, _mode = repo.index()
+
+    changed_test_patterns = replace(snapshot, metadata={**snapshot.metadata, "config_fingerprint": "stale"})
+    rebuilt_patterns, mode_patterns = update_graph_incremental(repo.config(), changed_test_patterns)
+    assert mode_patterns == "full"
+    assert rebuilt_patterns.metadata["config_fingerprint"] != "stale"
+
+    changed_ignored_paths = replace(
+        repo.config(),
+        ignored_path_patterns=repo.config().ignored_path_patterns + ("generated/*",),
+    )
+    rebuilt_ignored, mode_ignored = update_graph_incremental(changed_ignored_paths, snapshot)
+    assert mode_ignored == "full"
+    assert rebuilt_ignored.metadata["config_fingerprint"] != snapshot.metadata["config_fingerprint"]
+
+
 def test_update_graph_incremental_handles_non_python_change_without_reparse(repo):
     repo.write("app/__init__.py", "")
     repo.write("app/service.py", "VALUE = 1\n")

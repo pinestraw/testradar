@@ -46,7 +46,7 @@ def build_graph(config: TestradarConfig) -> GraphSnapshot:
         reverse_edges=_build_reverse_edges(resolved_files, module_to_path),
         repo_fingerprint=hash_fingerprint(tree_file_hashes),
         updated_paths=tuple(sorted(files)),
-        metadata={"python_file_count": str(len(files))},
+        metadata=_snapshot_metadata(config, python_file_count=len(files)),
     )
 
 
@@ -59,6 +59,8 @@ def update_graph_incremental(
     if previous.version != GRAPH_VERSION:
         return build_graph(config), "full"
     if previous.source_roots != config.normalized_source_roots():
+        return build_graph(config), "full"
+    if previous.metadata.get("config_fingerprint") != _config_fingerprint(config):
         return build_graph(config), "full"
 
     tree_file_hashes, py_file_hashes = scan_repo_hashes(
@@ -85,7 +87,7 @@ def update_graph_incremental(
             reverse_edges=previous.reverse_edges,
             repo_fingerprint=current_fingerprint,
             updated_paths=(),
-            metadata=previous.metadata,
+            metadata=_snapshot_metadata(config, python_file_count=len(previous.files)),
         )
         return updated, "incremental"
 
@@ -112,7 +114,7 @@ def update_graph_incremental(
         reverse_edges=_build_reverse_edges(resolved_files, module_to_path),
         repo_fingerprint=current_fingerprint,
         updated_paths=tuple(sorted(changed_paths | removed_paths)),
-        metadata={"python_file_count": str(len(resolved_files))},
+        metadata=_snapshot_metadata(config, python_file_count=len(resolved_files)),
     )
     return updated, "incremental"
 
@@ -178,6 +180,30 @@ def hash_fingerprint(file_hashes: dict[str, str]) -> str:
         digest.update(file_hashes[path].encode("utf-8"))
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def _config_fingerprint(config: TestradarConfig) -> str:
+    digest = hashlib.blake2b(digest_size=16)
+    fingerprint_groups = (
+        ("presets", config.presets),
+        ("detectors", config.detector_paths),
+        ("test_file_patterns", config.test_file_patterns),
+        ("ignored_path_patterns", config.ignored_path_patterns),
+    )
+    for label, values in fingerprint_groups:
+        digest.update(label.encode("utf-8"))
+        digest.update(b"\0")
+        for value in values:
+            digest.update(value.encode("utf-8"))
+            digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _snapshot_metadata(config: TestradarConfig, *, python_file_count: int) -> dict[str, str]:
+    return {
+        "config_fingerprint": _config_fingerprint(config),
+        "python_file_count": str(python_file_count),
+    }
 
 
 def _load_detectors(config: TestradarConfig) -> tuple[CouplingDetector, ...]:
