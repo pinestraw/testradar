@@ -139,16 +139,21 @@ def iter_repo_files(
     ignored_path_patterns: tuple[str, ...] = DEFAULT_IGNORED_PATH_PATTERNS,
 ) -> Iterable[Path]:
     for current_root, dir_names, file_names in os.walk(repo_root):
+        current_path = Path(current_root)
+        current_relative = relative_to_root(repo_root, current_path)
+        if current_relative != "." and path_is_ignored(current_relative, ignored_path_patterns):
+            dir_names[:] = []
+            continue
         dir_names[:] = sorted(
             name
             for name in dir_names
             if not path_is_ignored(
-                relative_to_root(repo_root, Path(current_root, name)),
+                relative_to_root(repo_root, Path(current_path, name)),
                 ignored_path_patterns,
             )
         )
         for file_name in sorted(file_names):
-            absolute_path = Path(current_root, file_name)
+            absolute_path = Path(current_path, file_name)
             if path_is_ignored(relative_to_root(repo_root, absolute_path), ignored_path_patterns):
                 continue
             yield absolute_path

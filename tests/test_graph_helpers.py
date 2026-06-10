@@ -31,6 +31,21 @@ def test_iter_repo_files_ignores_special_directories(tmp_path):
     assert paths == {"pkg/file.py"}
 
 
+@pytest.mark.skipif(not hasattr(__import__("os"), "symlink"), reason="symlinks unavailable")
+def test_iter_repo_files_skips_entered_ignored_symlink_subtrees(tmp_path):
+    git_target = tmp_path.parent / "{0}-git-store".format(tmp_path.name)
+    git_target.mkdir()
+    (git_target / "host-tools").mkdir(parents=True)
+    (git_target / "host-tools" / "python").write_text("ignored", encoding="utf-8")
+    (tmp_path / ".git").symlink_to(git_target, target_is_directory=True)
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "file.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    paths = {path.relative_to(tmp_path).as_posix() for path in iter_repo_files(tmp_path)}
+
+    assert paths == {"pkg/file.py"}
+
+
 def test_module_name_for_path_and_relative_import_resolution(tmp_path):
     root = tmp_path.resolve()
     pkg_root = root / "src"
