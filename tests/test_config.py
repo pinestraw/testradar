@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from testradar.config import _ensure_tuple, load_config
+from testradar.config import _ensure_tuple, _merge_unique, load_config
 
 
 def test_load_config_uses_defaults_without_pyproject(tmp_path: Path):
@@ -52,7 +52,8 @@ ignored_path_patterns = ["coverage", "reports/*"]
     assert config.test_file_patterns == ("spec_*.py",)
     assert config.lockfile_patterns == ("deps.lock",)
     assert config.global_patterns == ("project.toml",)
-    assert config.ignored_path_patterns == ("coverage", "reports/*")
+    assert config.ignored_path_patterns[:2] == (".git", ".hg")
+    assert config.ignored_path_patterns[-2:] == ("coverage", "reports/*")
 
 
 def test_load_config_prefers_explicit_git_overrides(tmp_path: Path):
@@ -85,3 +86,7 @@ def test_ensure_tuple_rejects_invalid_values():
 
     with pytest.raises(ValueError, match="field must be a string or list of strings"):
         _ensure_tuple(["ok", 3], field_name="field")
+
+
+def test_merge_unique_preserves_order_without_duplicates():
+    assert _merge_unique(("a", "b"), ("b", "c")) == ("a", "b", "c")

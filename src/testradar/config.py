@@ -82,6 +82,14 @@ def _resolve_optional_path(repo_root: Path, raw: Any, *, field_name: str) -> Opt
     return resolved
 
 
+def _merge_unique(base: tuple[str, ...], extra: tuple[str, ...]) -> tuple[str, ...]:
+    merged = list(base)
+    for item in extra:
+        if item not in merged:
+            merged.append(item)
+    return tuple(merged)
+
+
 def load_config(
     repo_root: Path,
     *,
@@ -139,9 +147,11 @@ def load_config(
         or DEFAULT_LOCKFILE_PATTERNS,
         global_patterns=_ensure_tuple(pyproject_table.get("global_patterns"), field_name="global_patterns")
         or DEFAULT_GLOBAL_PATTERNS,
-        ignored_path_patterns=_ensure_tuple(
-            pyproject_table.get("ignored_path_patterns"),
-            field_name="ignored_path_patterns",
-        )
-        or DEFAULT_IGNORED_PATH_PATTERNS,
+        ignored_path_patterns=_merge_unique(
+            DEFAULT_IGNORED_PATH_PATTERNS,
+            _ensure_tuple(
+                pyproject_table.get("ignored_path_patterns"),
+                field_name="ignored_path_patterns",
+            ),
+        ),
     )
