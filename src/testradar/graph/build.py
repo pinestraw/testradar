@@ -13,26 +13,18 @@ from testradar.detectors.django import DjangoCouplingDetector
 from testradar.detectors.generic import GenericDynamicImportDetector
 from testradar.detectors.pytest import PytestPluginDetector
 from testradar.models import FileRecord, GraphSnapshot, ImportRequest, relative_to_root
+from testradar.parse import parse_python_source
+from testradar.paths import DEFAULT_IGNORED_PATH_PATTERNS, path_is_ignored
 from testradar.policy.defaults import is_test_path
 
-IGNORED_DIR_NAMES = {
-    ".git",
-    ".hg",
-    ".svn",
-    ".venv",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    "__pycache__",
-    ".testradar",
-    "node_modules",
-}
-
-GRAPH_VERSION = 1
+GRAPH_VERSION = 3
 
 
 def build_graph(config: TestradarConfig) -> GraphSnapshot:
-    tree_file_hashes, py_file_hashes = scan_repo_hashes(config.repo_root)
+    tree_file_hashes, py_file_hashes = scan_repo_hashes(
+        config.repo_root,
+        ignored_path_patterns=config.ignored_path_patterns,
+    )
     detectors = _load_detectors(config)
     files = {
         path: _parse_file(
@@ -69,7 +61,10 @@ def update_graph_incremental(
     if previous.source_roots != config.normalized_source_roots():
         return build_graph(config), "full"
 
-    tree_file_hashes, py_file_hashes = scan_repo_hashes(config.repo_root)
+    tree_file_hashes, py_file_hashes = scan_repo_hashes(
+        config.repo_root,
+        ignored_path_patterns=config.ignored_path_patterns,
+    )
     current_fingerprint = hash_fingerprint(tree_file_hashes)
     if current_fingerprint == previous.repo_fingerprint:
         return previous, "unchanged"
@@ -122,10 +117,14 @@ def update_graph_incremental(
     return updated, "incremental"
 
 
-def scan_repo_hashes(repo_root: Path) -> tuple[dict[str, str], dict[str, str]]:
+def scan_repo_hashes(
+    repo_root: Path,
+    *,
+    ignored_path_patterns: tuple[str, ...] = DEFAULT_IGNORED_PATH_PATTERNS,
+) -> tuple[dict[str, str], dict[str, str]]:
     file_hashes: dict[str, str] = {}
     python_hashes: dict[str, str] = {}
-    for absolute_path in iter_repo_files(repo_root):
+    for absolute_path in iter_repo_files(repo_root, ignored_path_patterns=ignored_path_patterns):
         relative_path = relative_to_root(repo_root, absolute_path)
         digest = hash_file(absolute_path)
         file_hashes[relative_path] = digest
@@ -134,11 +133,25 @@ def scan_repo_hashes(repo_root: Path) -> tuple[dict[str, str], dict[str, str]]:
     return file_hashes, python_hashes
 
 
-def iter_repo_files(repo_root: Path) -> Iterable[Path]:
+def iter_repo_files(
+    repo_root: Path,
+    *,
+    ignored_path_patterns: tuple[str, ...] = DEFAULT_IGNORED_PATH_PATTERNS,
+) -> Iterable[Path]:
     for current_root, dir_names, file_names in os.walk(repo_root):
-        dir_names[:] = sorted(name for name in dir_names if name not in IGNORED_DIR_NAMES)
+        dir_names[:] = sorted(
+            name
+            for name in dir_names
+            if not path_is_ignored(
+                relative_to_root(repo_root, Path(current_root, name)),
+                ignored_path_patterns,
+            )
+        )
         for file_name in sorted(file_names):
-            yield Path(current_root, file_name)
+            absolute_path = Path(current_root, file_name)
+            if path_is_ignored(relative_to_root(repo_root, absolute_path), ignored_path_patterns):
+                continue
+            yield absolute_path
 
 
 def hash_file(path: Path) -> str:
@@ -189,7 +202,7 @@ def _parse_file(
     is_test = is_test_path(config, relative_path)
     source = path.read_text(encoding="utf-8")
     try:
-        tree = ast.parse(source, filename=relative_path)
+        tree = parse_python_source(source, filename=relative_path)
     except SyntaxError as exc:
         return FileRecord(
             path=relative_path,
@@ -239,10 +252,11 @@ def _extract_import_requests(
     module: str | None,
     is_package: bool,
 ) -> Iterable[ImportRequest]:
+    parent_map = _build_parent_map(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                yield ImportRequest(module=alias.name)
+                yield ImportRequest(module=alias.name, is_eager=_is_eager_import_node(node, parent_map))
         elif isinstance(node, ast.ImportFrom):
             resolved_module = _resolve_from_module(
                 current_module=module,
@@ -251,7 +265,12 @@ def _extract_import_requests(
                 is_package=is_package,
             )
             names = tuple(alias.name for alias in node.names)
-            yield ImportRequest(module=resolved_module, names=names, is_from=True)
+            yield ImportRequest(
+                module=resolved_module,
+                names=names,
+                is_from=True,
+                is_eager=_is_eager_import_node(node, parent_map),
+            )
 
 
 def _resolve_from_module(
@@ -291,7 +310,14 @@ def _resolve_file_imports(
 ) -> dict[str, FileRecord]:
     resolved: dict[str, FileRecord] = {}
     for path, record in files.items():
-        resolved_imports = sorted(_resolve_requests(record.imports, module_to_path))
+        resolved_imports = sorted(_resolve_requests(record.imports, module_to_path, files))
+        resolved_eager_imports = sorted(
+            _resolve_requests(
+                tuple(request for request in record.imports if request.is_eager),
+                module_to_path,
+                files,
+            ),
+        )
         resolved[path] = FileRecord(
             path=record.path,
             content_hash=record.content_hash,
@@ -300,6 +326,7 @@ def _resolve_file_imports(
             parse_error=record.parse_error,
             imports=record.imports,
             resolved_imports=tuple(resolved_imports),
+            resolved_eager_imports=tuple(resolved_eager_imports),
         )
     return resolved
 
@@ -307,6 +334,7 @@ def _resolve_file_imports(
 def _resolve_requests(
     requests: tuple[ImportRequest, ...],
     module_to_path: dict[str, str],
+    files: dict[str, FileRecord],
 ) -> set[str]:
     results: set[str] = set()
     for request in requests:
@@ -323,13 +351,102 @@ def _resolve_requests(
                 results.add(target)
             continue
         for name in request.names:
-            target = _best_module_match(f"{request.module}.{name}", module_to_path)
-            if target:
-                results.add(target)
+            targets = _resolve_from_import_name(
+                request.module,
+                name,
+                module_to_path,
+                files,
+            )
+            if targets:
+                results.update(targets)
                 continue
             fallback = _best_module_match(request.module, module_to_path)
             if fallback:
                 results.add(fallback)
+    return results
+
+
+def _resolve_from_import_name(
+    module_name: str,
+    symbol_name: str,
+    module_to_path: dict[str, str],
+    files: dict[str, FileRecord],
+) -> set[str]:
+    target = module_to_path.get(f"{module_name}.{symbol_name}")
+    if target:
+        return {target}
+
+    container_path = _best_module_match(module_name, module_to_path)
+    if not container_path:
+        return set()
+    if not container_path.endswith("/__init__.py"):
+        return {container_path}
+
+    resolved_reexport = _resolve_reexport(
+        module_name,
+        symbol_name,
+        module_to_path,
+        files,
+        seen={(module_name, symbol_name)},
+    )
+    if resolved_reexport:
+        return resolved_reexport
+    return {container_path}
+
+
+def _resolve_reexport(
+    module_name: str,
+    symbol_name: str,
+    module_to_path: dict[str, str],
+    files: dict[str, FileRecord],
+    *,
+    seen: set[tuple[str, str]],
+) -> set[str]:
+    container_path = _best_module_match(module_name, module_to_path)
+    if not container_path:
+        return set()
+
+    record = files.get(container_path)
+    if record is None:
+        return {container_path}
+
+    results: set[str] = set()
+    for request in record.imports:
+        if not request.is_from or not request.module:
+            continue
+        if not request.names or request.names == ("*",):
+            continue
+        if symbol_name not in request.names:
+            continue
+
+        target = module_to_path.get(f"{request.module}.{symbol_name}")
+        if target:
+            results.add(target)
+            continue
+
+        imported_path = _best_module_match(request.module, module_to_path)
+        if not imported_path:
+            continue
+        if not imported_path.endswith("/__init__.py"):
+            results.add(imported_path)
+            continue
+
+        key = (request.module, symbol_name)
+        if key in seen:
+            results.add(imported_path)
+            continue
+        nested = _resolve_reexport(
+            request.module,
+            symbol_name,
+            module_to_path,
+            files,
+            seen=seen | {key},
+        )
+        if nested:
+            results.update(nested)
+            continue
+        results.add(imported_path)
+
     return results
 
 
@@ -351,7 +468,24 @@ def _build_reverse_edges(
 ) -> dict[str, tuple[str, ...]]:
     reverse_edges: dict[str, set[str]] = {path: set() for path in files}
     for importing_path, record in files.items():
-        for imported_path in record.resolved_imports:
+        for imported_path in record.resolved_eager_imports:
             if imported_path in reverse_edges:
                 reverse_edges[imported_path].add(importing_path)
     return {path: tuple(sorted(importers)) for path, importers in reverse_edges.items()}
+
+
+def _build_parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    parent_map: dict[ast.AST, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parent_map[child] = parent
+    return parent_map
+
+
+def _is_eager_import_node(node: ast.AST, parent_map: dict[ast.AST, ast.AST]) -> bool:
+    current = parent_map.get(node)
+    while current is not None:
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            return False
+        current = parent_map.get(current)
+    return True

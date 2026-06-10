@@ -42,10 +42,12 @@ def save_graph(path: Path, snapshot: GraphSnapshot) -> None:
                         "module": item.module,
                         "names": list(item.names),
                         "is_from": item.is_from,
+                        "is_eager": item.is_eager,
                     }
                     for item in record.imports
                 ],
                 "resolved_imports": list(record.resolved_imports),
+                "resolved_eager_imports": list(record.resolved_eager_imports),
             }
             for relative_path, record in snapshot.files.items()
         },
@@ -55,7 +57,9 @@ def save_graph(path: Path, snapshot: GraphSnapshot) -> None:
         "updated_paths": list(snapshot.updated_paths),
         "metadata": snapshot.metadata,
     }
-    path.write_bytes(msgpack.packb(payload, use_bin_type=True))
+    temp_path = path.with_name(f"{path.name}.tmp")
+    temp_path.write_bytes(msgpack.packb(payload, use_bin_type=True))
+    temp_path.replace(path)
 
 
 def _deserialize_graph(payload: object) -> GraphSnapshot:
@@ -101,6 +105,7 @@ def _deserialize_file_record(relative_path: str, record: object) -> FileRecord:
             for item in record.get("imports", [])
         ),
         resolved_imports=tuple(record.get("resolved_imports", [])),
+        resolved_eager_imports=tuple(record.get("resolved_eager_imports", record.get("resolved_imports", []))),
     )
 
 
@@ -111,4 +116,5 @@ def _deserialize_import_request(payload: object) -> ImportRequest:
         module=payload.get("module"),
         names=tuple(payload.get("names", [])),
         is_from=payload.get("is_from", False),
+        is_eager=payload.get("is_eager", True),
     )

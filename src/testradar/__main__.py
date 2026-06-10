@@ -1,5 +1,9 @@
 from testradar.cli import main
 
 
-if __name__ == "__main__":
+def run() -> None:
     raise SystemExit(main())
+
+
+if __name__ == "__main__":
+    run()

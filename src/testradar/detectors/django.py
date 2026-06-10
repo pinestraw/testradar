@@ -17,10 +17,11 @@ class DjangoCouplingDetector:
         module: str | None,
     ) -> tuple[ImportRequest, ...]:
         results: list[ImportRequest] = []
+        parent_map = _build_parent_map(tree)
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
-                results.extend(_detect_get_model(node))
-                results.extend(_detect_connect_sender(node))
+                results.extend(_detect_get_model(node, parent_map))
+                results.extend(_detect_connect_sender(node, parent_map))
             if isinstance(node, ast.FunctionDef):
                 results.extend(_detect_receiver_sender(node))
             if isinstance(node, ast.AsyncFunctionDef):
@@ -28,7 +29,7 @@ class DjangoCouplingDetector:
         return tuple(results)
 
 
-def _detect_get_model(node: ast.Call) -> list[ImportRequest]:
+def _detect_get_model(node: ast.Call, parent_map: dict[ast.AST, ast.AST] | None = None) -> list[ImportRequest]:
     dotted = _call_name(node.func)
     if dotted != "apps.get_model":
         return []
@@ -37,10 +38,10 @@ def _detect_get_model(node: ast.Call) -> list[ImportRequest]:
     app_label = _const_str(node.args[0])
     if app_label is None:
         return []
-    return [ImportRequest(module=f"{app_label}.models")]
+    return [ImportRequest(module=f"{app_label}.models", is_eager=_is_eager_node(node, parent_map or {}))]
 
 
-def _detect_connect_sender(node: ast.Call) -> list[ImportRequest]:
+def _detect_connect_sender(node: ast.Call, parent_map: dict[ast.AST, ast.AST] | None = None) -> list[ImportRequest]:
     dotted = _call_name(node.func)
     if not dotted or not dotted.endswith(".connect"):
         return []
@@ -53,7 +54,7 @@ def _detect_connect_sender(node: ast.Call) -> list[ImportRequest]:
         module_name = _sender_label_to_module(label)
         if module_name is None:
             return []
-        return [ImportRequest(module=module_name)]
+        return [ImportRequest(module=module_name, is_eager=_is_eager_node(node, parent_map or {}))]
     return []
 
 
@@ -74,7 +75,7 @@ def _detect_receiver_sender(node: ast.FunctionDef | ast.AsyncFunctionDef) -> lis
             module_name = _sender_label_to_module(label)
             if module_name is None:
                 continue
-            results.append(ImportRequest(module=module_name))
+            results.append(ImportRequest(module=module_name, is_eager=True))
     return results
 
 
@@ -100,3 +101,20 @@ def _call_name(node: ast.expr) -> str | None:
             return None
         return f"{base}.{node.attr}"
     return None
+
+
+def _build_parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    parent_map: dict[ast.AST, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parent_map[child] = parent
+    return parent_map
+
+
+def _is_eager_node(node: ast.AST, parent_map: dict[ast.AST, ast.AST]) -> bool:
+    current = parent_map.get(node)
+    while current is not None:
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            return False
+        current = parent_map.get(current)
+    return True

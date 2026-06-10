@@ -14,25 +14,38 @@ from testradar.detectors.django import (
 )
 from testradar.detectors.generic import GenericDynamicImportDetector, _call_name as generic_call_name
 from testradar.detectors.pytest import PytestPluginDetector, _extract_plugin_requests
+from testradar.models import ImportRequest
 
 
 def test_generic_dynamic_import_detector_and_helper_branches():
     tree = ast.parse(
         """
 import importlib
+from typing import cast
 
 ONE = importlib.import_module("pkg.alpha")
 TWO = import_module("pkg.beta")
 THREE = __import__("pkg.gamma")
-FOUR = importlib.import_module()
-FIVE = importlib.import_module(NAME)
+FOUR = import_module("pkg.delta")
+VALUE = FOUR.Widget
+FIVE = cast("Any", import_module("pkg.epsilon")).Client
+SIX = importlib.import_module()
+SEVEN = importlib.import_module(NAME)
+EIGHT = import_module("pkg.theta")
 """,
     )
 
     detector = GenericDynamicImportDetector()
     results = detector.detect(tree=tree, path=Path("x.py"), module="pkg.loader")
 
-    assert [item.module for item in results] == ["pkg.alpha", "pkg.beta", "pkg.gamma"]
+    assert sorted(results, key=lambda item: (item.module or "", item.names, item.is_from)) == sorted((
+        ImportRequest(module="pkg.epsilon", names=("Client",), is_from=True),
+        ImportRequest(module="pkg.delta", names=("Widget",), is_from=True),
+        ImportRequest(module="pkg.alpha"),
+        ImportRequest(module="pkg.beta"),
+        ImportRequest(module="pkg.gamma"),
+        ImportRequest(module="pkg.theta"),
+    ), key=lambda item: (item.module or "", item.names, item.is_from))
     assert generic_call_name(ast.parse("value").body[0].value) == "value"
     assert generic_call_name(ast.parse("pkg.value").body[0].value) == "pkg.value"
     assert generic_call_name(ast.parse("call().value").body[0].value) is None
@@ -128,3 +141,42 @@ def handle(sender, **kwargs):
         "billing.models",
         "billing.models",
     ]
+
+
+def test_django_detector_marks_function_scope_calls_lazy_and_skips_non_receiver_decorators():
+    tree = ast.parse(
+        """
+from django.dispatch import receiver
+
+def load():
+    apps.get_model("billing", "Invoice")
+    signal.connect(sender="billing.Invoice")
+
+@receiver
+def no_call(sender, **kwargs):
+    return None
+
+@other(post_save, sender="billing.Invoice")
+def wrong_name(sender, **kwargs):
+    return None
+
+@receiver(post_save, value="billing.Invoice")
+def missing_sender(sender, **kwargs):
+    return None
+
+@receiver(post_save, sender="Invoice")
+async def bad_sender(sender, **kwargs):
+    return None
+
+@receiver(post_save, sender="billing.Invoice")
+async def async_handle(sender, **kwargs):
+    return None
+""",
+    )
+
+    detector = DjangoCouplingDetector()
+    results = detector.detect(tree=tree, path=Path("signals.py"), module="billing.signals")
+
+    lazy_call_results = [item for item in results if item.is_eager is False]
+    assert [item.module for item in lazy_call_results] == ["billing.models", "billing.models"]
+    assert any(item.is_eager is True and item.module == "billing.models" for item in results)

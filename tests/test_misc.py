@@ -42,9 +42,14 @@ def test_models_report_and_invert_helpers(tmp_path):
         graph_snapshot=snapshot,
         full_suite=True,
         graph_mode="full",
+        escalations=["parse-error"],
     )
 
     assert selection_report(result)["targets"][0]["source"] == "global"
+    assert selection_report(result)["escalations"] == ["parse-error"]
+    assert selection_report(result)["target_count"] == 1
+    assert selection_report(result)["file_target_count"] == 1
+    assert selection_report(result)["nodeid_target_count"] == 0
     assert result.target_strings() == ["tests/test_one.py"]
     assert snapshot.python_paths() == {
         "conftest.py",

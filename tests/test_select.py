@@ -151,7 +151,7 @@ def test_root_conftest_selects_full_suite(repo):
     assert result.target_strings() == ["tests/test_one.py", "tests/test_two.py"]
 
 
-def test_ast_parse_error_escalates_to_all_tests(repo):
+def test_ast_parse_error_falls_back_to_known_dependents(repo):
     repo.write("app/__init__.py", "")
     repo.write("app/service.py", "VALUE = 1\n")
     repo.write("tests/test_service.py", "from app import service\n\ndef test_value():\n    assert service.VALUE == 1\n")
@@ -162,7 +162,97 @@ def test_ast_parse_error_escalates_to_all_tests(repo):
 
     result = repo.select()
 
-    assert result.target_strings() == ["tests/test_other.py", "tests/test_service.py"]
+    assert result.escalations == ["app/service.py: parse-error fallback (invalid syntax (service.py, line 1))"]
+    assert result.target_strings() == ["tests/test_service.py"]
+
+
+def test_legacy_except_syntax_allows_source_nodeid_narrowing(repo):
+    repo.write("app/__init__.py", "")
+    repo.write(
+        "app/service.py",
+        """
+        def alpha():
+            try:
+                return 1
+            except TypeError, ValueError:
+                return 0
+
+        def beta():
+            return 2
+        """,
+    )
+    repo.write(
+        "tests/test_service.py",
+        """
+        from app.service import alpha, beta
+
+        def test_alpha():
+            assert alpha() == 1
+
+        def test_beta():
+            assert beta() == 2
+        """,
+    )
+    repo.commit_all()
+    repo.index()
+    repo.write(
+        "app/service.py",
+        """
+        def alpha():
+            try:
+                return 3
+            except TypeError, ValueError:
+                return 0
+
+        def beta():
+            return 2
+        """,
+    )
+
+    result = repo.select()
+
+    assert result.escalations == []
+    assert result.target_strings() == ["tests/test_service.py::test_alpha"]
+
+
+def test_lazy_conftest_dependency_does_not_expand_to_full_suite(repo):
+    repo.write("app/__init__.py", "")
+    repo.write("app/service.py", "VALUE = 1\n")
+    repo.write(
+        "bridge.py",
+        """
+        from importlib import import_module
+
+        def load_service_value():
+            module = import_module("app.service")
+            return module.VALUE
+
+        def load_service_again():
+            from app import service
+
+            return service.VALUE
+        """,
+    )
+    repo.write(
+        "conftest.py",
+        """
+        import pytest
+        import bridge
+
+        @pytest.fixture(autouse=True)
+        def noop_fixture():
+            assert bridge is not None
+        """,
+    )
+    repo.write("tests/test_service.py", "from app import service\n\ndef test_value():\n    assert service.VALUE == 1\n")
+    repo.write("tests/test_other.py", "def test_other():\n    assert True\n")
+    repo.commit_all()
+    repo.index()
+    repo.write("app/service.py", "VALUE = 2\n")
+
+    result = repo.select()
+
+    assert result.target_strings() == ["tests/test_service.py"]
 
 
 def test_rename_uses_previous_graph_for_dependents(repo):
@@ -177,6 +267,301 @@ def test_rename_uses_previous_graph_for_dependents(repo):
     result = repo.select()
 
     assert result.target_strings() == ["tests/test_service.py"]
+
+
+def test_reexported_package_symbols_do_not_select_unrelated_importers(repo):
+    repo.write(
+        "pkg/__init__.py",
+        """
+        from .alpha import Alpha
+        from .beta import Beta
+        """,
+    )
+    repo.write("pkg/alpha.py", "class Alpha:\n    VALUE = 1\n")
+    repo.write("pkg/beta.py", "class Beta:\n    VALUE = 2\n")
+    repo.write(
+        "pkg/use_alpha.py",
+        """
+        from pkg import Alpha
+
+        VALUE = Alpha.VALUE
+        """,
+    )
+    repo.write(
+        "pkg/use_beta.py",
+        """
+        from pkg import Beta
+
+        VALUE = Beta.VALUE
+        """,
+    )
+    repo.write(
+        "tests/test_alpha.py",
+        """
+        from pkg import use_alpha
+
+        def test_alpha():
+            assert use_alpha.VALUE == 1
+        """,
+    )
+    repo.write(
+        "tests/test_beta.py",
+        """
+        from pkg import use_beta
+
+        def test_beta():
+            assert use_beta.VALUE == 2
+        """,
+    )
+    repo.commit_all()
+    repo.index()
+    repo.write("pkg/alpha.py", "class Alpha:\n    VALUE = 3\n")
+
+    result = repo.select()
+
+    assert result.target_strings() == ["tests/test_alpha.py"]
+
+
+def test_source_change_selects_directly_impacted_test_function(repo):
+    repo.write("app/__init__.py", "")
+    repo.write(
+        "app/service.py",
+        """
+        def foo():
+            return 1
+
+        def bar():
+            return 2
+        """,
+    )
+    repo.write(
+        "tests/test_service.py",
+        """
+        from app import service
+
+        def test_foo():
+            assert service.foo() == 1
+
+        def test_bar():
+            assert service.bar() == 2
+        """,
+    )
+    repo.commit_all()
+    repo.index()
+    repo.write(
+        "app/service.py",
+        """
+        def foo():
+            return 10
+
+        def bar():
+            return 2
+        """,
+    )
+
+    result = repo.select()
+
+    assert result.target_strings() == ["tests/test_service.py::test_foo"]
+
+
+def test_source_change_tracks_module_helper_usage(repo):
+    repo.write("app/__init__.py", "")
+    repo.write(
+        "app/service.py",
+        """
+        def foo():
+            return 1
+
+        def bar():
+            return 2
+        """,
+    )
+    repo.write(
+        "tests/test_service.py",
+        """
+        from app import service
+
+        def call_foo():
+            return service.foo()
+
+        def call_bar():
+            return service.bar()
+
+        def test_foo():
+            assert call_foo() == 1
+
+        def test_bar():
+            assert call_bar() == 2
+        """,
+    )
+    repo.commit_all()
+    repo.index()
+    repo.write(
+        "app/service.py",
+        """
+        def foo():
+            return 10
+
+        def bar():
+            return 2
+        """,
+    )
+
+    result = repo.select()
+
+    assert result.target_strings() == ["tests/test_service.py::test_foo"]
+
+
+def test_indirect_source_dependency_keeps_whole_test_file(repo):
+    repo.write("app/__init__.py", "")
+    repo.write(
+        "app/service.py",
+        """
+        def foo():
+            return 1
+
+        def bar():
+            return 2
+        """,
+    )
+    repo.write(
+        "app/api.py",
+        """
+        from app import service
+
+        def run_foo():
+            return service.foo()
+
+        def run_bar():
+            return service.bar()
+        """,
+    )
+    repo.write(
+        "tests/test_api.py",
+        """
+        from app import api
+
+        def test_foo():
+            assert api.run_foo() == 1
+
+        def test_bar():
+            assert api.run_bar() == 2
+        """,
+    )
+    repo.commit_all()
+    repo.index()
+    repo.write(
+        "app/service.py",
+        """
+        def foo():
+            return 10
+
+        def bar():
+            return 2
+        """,
+    )
+
+    result = repo.select()
+
+    assert result.target_strings() == ["tests/test_api.py"]
+
+
+def test_module_level_execution_keeps_whole_test_file(repo):
+    repo.write("app/__init__.py", "")
+    repo.write(
+        "app/service.py",
+        """
+        def foo():
+            return 1
+
+        def bar():
+            return 2
+        """,
+    )
+    repo.write(
+        "tests/test_service.py",
+        """
+        from app import service
+
+        VALUE = service.foo()
+
+        def test_foo():
+            assert VALUE == 1
+
+        def test_bar():
+            assert VALUE == 1
+        """,
+    )
+    repo.commit_all()
+    repo.index()
+    repo.write(
+        "app/service.py",
+        """
+        def foo():
+            return 10
+
+        def bar():
+            return 2
+        """,
+    )
+
+    result = repo.select()
+
+    assert result.target_strings() == ["tests/test_service.py"]
+
+
+def test_dynamic_imported_package_symbols_do_not_select_unrelated_importers(repo):
+    repo.write(
+        "pkg/__init__.py",
+        """
+        from .alpha import Alpha
+        from .beta import Beta
+        """,
+    )
+    repo.write("pkg/alpha.py", "class Alpha:\n    VALUE = 1\n")
+    repo.write("pkg/beta.py", "class Beta:\n    VALUE = 2\n")
+    repo.write(
+        "pkg/use_alpha.py",
+        """
+        from importlib import import_module
+
+        package = import_module("pkg")
+        VALUE = package.Alpha.VALUE
+        """,
+    )
+    repo.write(
+        "pkg/use_beta.py",
+        """
+        from importlib import import_module
+
+        VALUE = import_module("pkg").Beta.VALUE
+        """,
+    )
+    repo.write(
+        "tests/test_alpha.py",
+        """
+        from pkg import use_alpha
+
+        def test_alpha():
+            assert use_alpha.VALUE == 1
+        """,
+    )
+    repo.write(
+        "tests/test_beta.py",
+        """
+        from pkg import use_beta
+
+        def test_beta():
+            assert use_beta.VALUE == 2
+        """,
+    )
+    repo.commit_all()
+    repo.index()
+    repo.write("pkg/alpha.py", "class Alpha:\n    VALUE = 3\n")
+
+    result = repo.select()
+
+    assert result.target_strings() == ["tests/test_alpha.py"]
 
 
 def test_django_settings_change_selects_full_suite(repo):

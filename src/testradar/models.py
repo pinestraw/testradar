@@ -68,6 +68,7 @@ class ImportRequest:
     module: Optional[str]
     names: tuple[str, ...] = ()
     is_from: bool = False
+    is_eager: bool = True
 
 
 @dataclass
@@ -79,6 +80,7 @@ class FileRecord:
     parse_error: Optional[str]
     imports: tuple[ImportRequest, ...]
     resolved_imports: tuple[str, ...] = ()
+    resolved_eager_imports: tuple[str, ...] = ()
 
 
 @dataclass
@@ -119,6 +121,7 @@ class SelectionResult:
     graph_snapshot: GraphSnapshot
     full_suite: bool = False
     graph_mode: str = "unchanged"
+    escalations: list[str] = field(default_factory=list)
 
     def target_strings(self) -> list[str]:
         return [item.target for item in self.targets]

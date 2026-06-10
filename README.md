@@ -14,6 +14,37 @@ or with an optional Django preset.
 3. Run `testradar index`.
 4. Run `testradar select` and feed the emitted targets to pytest.
 
+Example with persisted outputs:
+
+```bash
+testradar select \
+  --report reports/testradar-selection.json \
+  --targets-file reports/testradar-targets.txt
+```
+
+### Linked worktrees in Docker
+
+If you run `testradar` inside a container against a linked git worktree, mount the
+shared git directory and pass `--git-dir` plus `--git-work-tree`. Example:
+
+```bash
+testradar \
+  --repo-root /code \
+  --git-dir /git-common/worktrees/my-worktree \
+  --git-work-tree /code \
+  select
+```
+
+### Ignoring runner artifacts
+
+`testradar` ignores common cache and coverage artifacts by default. Repositories
+with additional long-lived generated paths can extend this in `pyproject.toml`:
+
+```toml
+[tool.testradar]
+ignored_path_patterns = ["coverage", "reports/*", "web/.next/*"]
+```
+
 ## Status
 
 This repository currently implements the static analysis engine, incremental

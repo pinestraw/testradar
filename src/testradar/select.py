@@ -10,12 +10,13 @@ from testradar.graph.invert import all_test_files, app_tests, dependent_tests, t
 from testradar.graph.store import load_graph, save_graph
 from testradar.models import (
     ChangeScope,
+    FileRecord,
     GraphSnapshot,
     SelectedTarget,
     SelectionResult,
     SelectionSource,
 )
-from testradar.nodeids import select_changed_tests
+from testradar.nodeids import select_changed_tests, select_source_dependent_tests
 
 
 SOURCE_PRIORITY = {
@@ -34,13 +35,25 @@ def index_repository(config: TestradarConfig) -> tuple[GraphSnapshot, str]:
 
 def select_targets(config: TestradarConfig) -> SelectionResult:
     previous = load_graph(config.graph_path)
-    base_commit = resolve_base_commit(config.repo_root, config.base_ref)
-    changes = changed_files(config.repo_root, base_commit)
+    base_commit = resolve_base_commit(
+        config.repo_root,
+        config.base_ref,
+        git_dir=config.git_dir,
+        git_work_tree=config.git_work_tree,
+    )
+    changes = changed_files(
+        config.repo_root,
+        base_commit,
+        git_dir=config.git_dir,
+        git_work_tree=config.git_work_tree,
+        ignored_path_patterns=config.ignored_path_patterns,
+    )
     current, graph_mode = update_graph_incremental(config, previous)
     save_graph(config.graph_path, current)
 
     targets: dict[str, SelectedTarget] = {}
     reasons: list[str] = []
+    escalations: list[str] = []
     full_suite = False
 
     for change, classification in zip(changes, classify_changes(config, changes)):
@@ -81,9 +94,17 @@ def select_targets(config: TestradarConfig) -> SelectionResult:
 
         if classification.scope == ChangeScope.SOURCE:
             reasons.append(f"{change.path}: {classification.reason}")
+            parse_error = _source_change_parse_error(current=current, previous=previous, change=change)
+            if parse_error is not None:
+                escalations.append(f"{change.path}: parse-error fallback ({parse_error})")
             _record_test_files(
                 targets,
-                _select_source_change(current=current, previous=previous, change=change),
+                _select_source_change(
+                    repo_root=config.repo_root,
+                    current=current,
+                    previous=previous,
+                    change=change,
+                ),
                 SelectionSource.STATIC,
                 classification.reason,
             )
@@ -95,6 +116,7 @@ def select_targets(config: TestradarConfig) -> SelectionResult:
         graph_snapshot=current,
         full_suite=full_suite,
         graph_mode=graph_mode,
+        escalations=escalations,
     )
 
 
@@ -113,6 +135,7 @@ def _select_test_change(path: Path, change) -> list[str]:
 
 def _select_source_change(
     *,
+    repo_root: Path,
     current: GraphSnapshot,
     previous: GraphSnapshot | None,
     change,
@@ -128,13 +151,40 @@ def _select_source_change(
         tests.update(dependent_tests(previous, change.old_path))
 
     record = snapshot.files.get(changed_path)
-    if record and record.parse_error:
-        return all_test_files(current)
-
-    tests.update(dependent_tests(snapshot, changed_path))
+    dependent = set(dependent_tests(snapshot, changed_path))
     if change.is_rename:
-        tests.update(dependent_tests(current, change.path))
+        dependent.update(dependent_tests(current, change.path))
+
+    tests.update(
+        _narrow_source_targets(
+            repo_root=repo_root,
+            dependent_test_files=dependent,
+            snapshot=snapshot,
+            source_record=record,
+            changed_path=changed_path,
+            change=change,
+        ),
+    )
     return tests
+
+
+def _source_change_parse_error(
+    *,
+    current: GraphSnapshot,
+    previous: GraphSnapshot | None,
+    change,
+) -> str | None:
+    snapshot = current
+    changed_path = change.path
+
+    if change.is_deleted and previous is not None and change.old_path:
+        snapshot = previous
+        changed_path = change.old_path
+
+    record = snapshot.files.get(changed_path)
+    if record and record.parse_error:
+        return record.parse_error
+    return None
 
 
 def _record_test_files(
@@ -153,7 +203,54 @@ def _record_target(
     source: SelectionSource,
     reason: str,
 ) -> None:
+    file_target = target.split("::", 1)[0]
+    if target != file_target and file_target in targets:
+        return
+
+    if target == file_target:
+        for existing_target in list(targets):
+            if existing_target.startswith(f"{file_target}::"):
+                del targets[existing_target]
+
     existing = targets.get(target)
     if existing and SOURCE_PRIORITY[existing.source] >= SOURCE_PRIORITY[source]:
         return
     targets[target] = SelectedTarget(target=target, source=source, reason=reason)
+
+
+def _narrow_source_targets(
+    *,
+    repo_root: Path,
+    dependent_test_files: set[str],
+    snapshot: GraphSnapshot,
+    source_record: FileRecord | None,
+    changed_path: str,
+    change,
+) -> set[str]:
+    if source_record is None or source_record.module is None:
+        return dependent_test_files
+    if change.is_deleted or change.is_rename:
+        return dependent_test_files
+
+    targets: set[str] = set()
+    for test_file in dependent_test_files:
+        test_record = snapshot.files.get(test_file)
+        if test_record is None or changed_path not in test_record.resolved_imports:
+            targets.add(test_file)
+            continue
+        try:
+            narrowed = select_source_dependent_tests(
+                test_path=repo_root / test_file,
+                test_relative_path=test_file,
+                source_path=repo_root / changed_path,
+                source_relative_path=changed_path,
+                source_module=source_record.module,
+                hunks=change.hunks,
+            )
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            narrowed = None
+        if narrowed is None:
+            targets.add(test_file)
+            continue
+        targets.update(narrowed)
+    return targets

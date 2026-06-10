@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from os import environ
 from pathlib import Path
 from typing import Any, Optional
+
+from testradar.paths import DEFAULT_IGNORED_PATH_PATTERNS
 
 try:
     import tomllib
@@ -33,11 +36,14 @@ class TestradarConfig:
     base_ref: str
     source_roots: tuple[Path, ...]
     graph_path: Path
+    git_dir: Optional[Path]
+    git_work_tree: Optional[Path]
     presets: tuple[str, ...]
     detector_paths: tuple[str, ...]
     test_file_patterns: tuple[str, ...]
     lockfile_patterns: tuple[str, ...]
     global_patterns: tuple[str, ...]
+    ignored_path_patterns: tuple[str, ...]
 
     def normalized_source_roots(self) -> tuple[str, ...]:
         return tuple(path.relative_to(self.repo_root).as_posix() for path in self.source_roots)
@@ -65,11 +71,24 @@ def _ensure_tuple(raw: Any, *, field_name: str) -> tuple[str, ...]:
     raise ValueError(f"{field_name} must be a string or list of strings")
 
 
+def _resolve_optional_path(repo_root: Path, raw: Any, *, field_name: str) -> Optional[Path]:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ValueError(f"{field_name} must be a string")
+    resolved = Path(raw)
+    if not resolved.is_absolute():
+        resolved = (repo_root / resolved).resolve()
+    return resolved
+
+
 def load_config(
     repo_root: Path,
     *,
     base_ref: Optional[str] = None,
     graph_path: Optional[str] = None,
+    git_dir: Optional[str] = None,
+    git_work_tree: Optional[str] = None,
 ) -> TestradarConfig:
     pyproject_table = _load_table(repo_root / "pyproject.toml")
 
@@ -94,6 +113,18 @@ def load_config(
         base_ref=base_ref or pyproject_table.get("base_ref", "origin/main"),
         source_roots=source_roots,
         graph_path=resolved_graph_path,
+        git_dir=_resolve_optional_path(
+            repo_root,
+            git_dir or pyproject_table.get("git_dir") or environ.get("TESTRADAR_GIT_DIR"),
+            field_name="git_dir",
+        ),
+        git_work_tree=_resolve_optional_path(
+            repo_root,
+            git_work_tree
+            or pyproject_table.get("git_work_tree")
+            or environ.get("TESTRADAR_GIT_WORK_TREE"),
+            field_name="git_work_tree",
+        ),
         presets=raw_presets,
         detector_paths=_ensure_tuple(pyproject_table.get("detectors"), field_name="detectors"),
         test_file_patterns=_ensure_tuple(
@@ -108,4 +139,9 @@ def load_config(
         or DEFAULT_LOCKFILE_PATTERNS,
         global_patterns=_ensure_tuple(pyproject_table.get("global_patterns"), field_name="global_patterns")
         or DEFAULT_GLOBAL_PATTERNS,
+        ignored_path_patterns=_ensure_tuple(
+            pyproject_table.get("ignored_path_patterns"),
+            field_name="ignored_path_patterns",
+        )
+        or DEFAULT_IGNORED_PATH_PATTERNS,
     )

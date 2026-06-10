@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-import runpy
+from importlib import import_module, reload
+from pathlib import Path
 
 import pytest
 
@@ -11,13 +12,31 @@ from testradar import cli
 
 def test_package_metadata_and_main_module(monkeypatch):
     monkeypatch.setattr("testradar.cli.main", lambda argv=None: 7)
+    main_module = import_module("testradar.__main__")
 
     with pytest.raises(SystemExit) as exc_info:
-        runpy.run_module("testradar.__main__", run_name="__main__")
+        main_module.run()
 
     assert exc_info.value.code == 7
     assert testradar.__version__ == "0.1.0"
     assert testradar.__all__ == ["__version__"]
+
+
+def test_runtime_imports_cover_entry_modules(monkeypatch):
+    monkeypatch.setattr("testradar.cli.main", lambda argv=None: 3)
+
+    package = reload(import_module("testradar"))
+    plugin = reload(import_module("testradar.pytest_plugin"))
+    main_module = import_module("testradar.__main__")
+
+    assert package.__version__ == "0.1.0"
+    assert callable(plugin.pytest_addoption)
+
+    main_path = Path(main_module.__file__)
+    with pytest.raises(SystemExit) as exc_info:
+        exec(compile(main_path.read_text(encoding="utf-8"), str(main_path), "exec"), {"__name__": "__main__"})
+
+    assert exc_info.value.code == 3
 
 
 def test_main_requires_subcommand(repo):
@@ -69,14 +88,25 @@ def test_main_runs_select_with_report_and_json(repo, capsys):
     repo.write("app/service.py", "VALUE = 2\n")
 
     report_path = repo.root / "reports" / "selection.json"
+    targets_path = repo.root / "reports" / "selection.txt"
     assert cli.main(
-        ["--repo-root", str(repo.root), "select", "--report", str(report_path)],
+        [
+            "--repo-root",
+            str(repo.root),
+            "select",
+            "--report",
+            str(report_path),
+            "--targets-file",
+            str(targets_path),
+        ],
     ) == 0
     text_output = capsys.readouterr().out
     assert "tests/test_service.py" in text_output
     assert report_path.exists()
+    assert targets_path.read_text(encoding="utf-8") == "tests/test_service.py\n"
     report_payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert report_payload["targets"][0]["target"] == "tests/test_service.py"
+    assert report_payload["target_count"] == 1
 
     assert cli.main(["--repo-root", str(repo.root), "select", "--json"]) == 0
     json_output = json.loads(capsys.readouterr().out)
@@ -114,3 +144,31 @@ def test_main_uses_graph_path_override(repo, capsys):
     capsys.readouterr()
 
     assert graph_path.exists()
+
+
+def test_main_passes_git_overrides_to_load_config(monkeypatch, tmp_path: Path):
+    captured: dict[str, object] = {}
+
+    def fake_load_config(repo_root, **kwargs):
+        captured["repo_root"] = repo_root
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("testradar.cli.load_config", fake_load_config)
+    monkeypatch.setattr("testradar.cli._handle_index", lambda _args, _config: 0)
+
+    assert cli.main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--git-dir",
+            "/git-common/worktrees/feature",
+            "--git-work-tree",
+            "/code",
+            "index",
+        ],
+    ) == 0
+
+    assert captured["repo_root"] == tmp_path.resolve()
+    assert captured["git_dir"] == "/git-common/worktrees/feature"
+    assert captured["git_work_tree"] == "/code"

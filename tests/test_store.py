@@ -39,6 +39,23 @@ def test_save_and_load_graph_round_trip(tmp_path):
     assert loaded == snapshot
 
 
+def test_save_graph_replaces_existing_file_atomically(tmp_path):
+    snapshot = GraphSnapshot(
+        version=1,
+        source_roots=(".",),
+        files={},
+        module_to_path={},
+        reverse_edges={},
+        repo_fingerprint="fingerprint",
+    )
+    path = tmp_path / "graph.msgpack"
+
+    save_graph(path, snapshot)
+
+    assert path.exists()
+    assert not path.with_name("graph.msgpack.tmp").exists()
+
+
 def test_store_deserializers_reject_invalid_payloads():
     with pytest.raises(ValueError, match="must be a mapping"):
         _deserialize_graph([])

@@ -15,7 +15,7 @@ from testradar.graph.build import (
     scan_repo_hashes,
     update_graph_incremental,
 )
-from testradar.models import ImportRequest
+from testradar.models import FileRecord, ImportRequest
 
 
 def test_iter_repo_files_ignores_special_directories(tmp_path):
@@ -60,17 +60,44 @@ def test_resolve_requests_and_best_module_match():
         "pkg.alpha": "pkg/alpha.py",
         "pkg.beta": "pkg/beta.py",
     }
+    files = {
+        "pkg/__init__.py": FileRecord(
+            path="pkg/__init__.py",
+            content_hash="hash",
+            module="pkg",
+            is_test=False,
+            parse_error=None,
+            imports=(ImportRequest(module="pkg.beta", names=("Beta",), is_from=True),),
+        ),
+        "pkg/alpha.py": FileRecord(
+            path="pkg/alpha.py",
+            content_hash="hash",
+            module="pkg.alpha",
+            is_test=False,
+            parse_error=None,
+            imports=(),
+        ),
+        "pkg/beta.py": FileRecord(
+            path="pkg/beta.py",
+            content_hash="hash",
+            module="pkg.beta",
+            is_test=False,
+            parse_error=None,
+            imports=(),
+        ),
+    }
     requests = (
         ImportRequest(module=None),
         ImportRequest(module="pkg.alpha"),
         ImportRequest(module="pkg", names=(), is_from=True),
         ImportRequest(module="pkg", names=("alpha",), is_from=True),
+        ImportRequest(module="pkg", names=("Beta",), is_from=True),
         ImportRequest(module="pkg", names=("missing",), is_from=True),
     )
 
-    resolved = _resolve_requests(requests, module_map)
+    resolved = _resolve_requests(requests, module_map, files)
 
-    assert resolved == {"pkg/__init__.py", "pkg/alpha.py"}
+    assert resolved == {"pkg/__init__.py", "pkg/alpha.py", "pkg/beta.py"}
     assert _best_module_match("pkg.beta.value", module_map) == "pkg/beta.py"
     assert _best_module_match("missing", module_map) is None
 
