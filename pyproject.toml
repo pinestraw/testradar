@@ -4,13 +4,36 @@ build-backend = "hatchling.build"
 
 [project]
 name = "testradar"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Framework-agnostic test impact analysis for pytest"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
   { name = "Pinestraw" },
+]
+keywords = [
+  "pytest",
+  "testing",
+  "test-impact-analysis",
+  "ci",
+  "django",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Framework :: Pytest",
+  "Topic :: Software Development :: Testing",
+  "Typing :: Typed",
 ]
 dependencies = [
   "msgpack>=1.0.8",
@@ -18,15 +41,25 @@ dependencies = [
   "tomli>=2.0.1; python_version < '3.11'",
 ]
 
+[project.urls]
+Homepage = "https://github.com/pinestraw/testradar"
+Documentation = "https://github.com/pinestraw/testradar#readme"
+Repository = "https://github.com/pinestraw/testradar"
+Issues = "https://github.com/pinestraw/testradar/issues"
+Changelog = "https://github.com/pinestraw/testradar/releases"
+
 [project.optional-dependencies]
 cov = [
   "coverage>=7",
 ]
 django = []
 dev = [
+  "build>=1.2",
+  "hatchling>=1.26",
   "pytest>=8.3",
   "pytest-cov>=6.0",
   "ruff>=0.12",
+  "twine>=6.1",
 ]
 
 [project.scripts]
@@ -34,6 +67,21 @@ testradar = "testradar.cli:main"
 
 [project.entry-points.pytest11]
 testradar = "testradar.pytest_plugin"
+
+[tool.hatch.version]
+path = "src/testradar/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/LICENSE",
+  "/Makefile",
+  "/README.md",
+  "/docs",
+  "/pyproject.toml",
+  "/scripts",
+  "/src",
+  "/tests",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/testradar"]

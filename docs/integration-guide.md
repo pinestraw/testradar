@@ -2,14 +2,29 @@
 
 ## Install
 
+Until the package is published to PyPI, install from a checkout or from GitHub.
+The local helper targets install into the user site-packages and do not require
+a virtualenv.
+
+For local development from a checkout:
+
 ```bash
-pip install testradar
+make bootstrap-dev
 ```
 
-For Django-specific policy and detectors:
+For a direct GitHub install:
 
 ```bash
-pip install 'testradar[django]'
+pip install "git+https://github.com/pinestraw/testradar.git"
+```
+
+If your user-site bin directory is not on `PATH`, run the CLI as
+`python -m testradar`.
+
+Once the package is published, the install becomes:
+
+```bash
+pip install testradar
 ```
 
 ## Configure
