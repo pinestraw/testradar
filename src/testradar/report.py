@@ -9,6 +9,9 @@ def selection_report(result: SelectionResult) -> dict[str, object]:
     return {
         "full_suite": result.full_suite,
         "graph_mode": result.graph_mode,
+        "resolved_base": result.resolved_base,
+        "resolved_head": result.resolved_head,
+        "comparison_mode": result.comparison_mode,
         "reasons": result.reasons,
         "reason_count": len(result.reasons),
         "escalations": result.escalations,

@@ -6,74 +6,118 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from testradar.models import FileChange, HunkRange
+from testradar.models import FileChange, HunkRange, ResolvedComparison
 from testradar.paths import DEFAULT_IGNORED_PATH_PATTERNS, path_is_ignored
 
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+THREE_DOT_MERGE_BASE = "three-dot-merge-base"
+MERGE_BASE_TO_WORKING_TREE = "merge-base-to-working-tree"
 
 
-def resolve_base_commit(
+def resolve_comparison(
     repo_root: Path,
     base_ref: str,
     *,
+    diff_base: Optional[str] = None,
+    diff_head: Optional[str] = None,
     git_dir: Optional[Path] = None,
     git_work_tree: Optional[Path] = None,
-) -> str:
-    result = _git(repo_root, "merge-base", base_ref, "HEAD", git_dir=git_dir, git_work_tree=git_work_tree)
-    return result.stdout.strip()
+) -> ResolvedComparison:
+    if diff_base is not None and diff_head is not None:
+        resolved_head = _git(
+            repo_root,
+            "rev-parse",
+            diff_head,
+            git_dir=git_dir,
+            git_work_tree=git_work_tree,
+        ).stdout.strip()
+        resolved_base = _git(
+            repo_root,
+            "merge-base",
+            diff_base,
+            resolved_head,
+            git_dir=git_dir,
+            git_work_tree=git_work_tree,
+        ).stdout.strip()
+        return ResolvedComparison(
+            resolved_base=resolved_base,
+            resolved_head=resolved_head,
+            comparison_mode=THREE_DOT_MERGE_BASE,
+            include_working_tree=False,
+        )
+
+    resolved_head = _git(repo_root, "rev-parse", "HEAD", git_dir=git_dir, git_work_tree=git_work_tree).stdout.strip()
+    resolved_base = _git(
+        repo_root,
+        "merge-base",
+        base_ref,
+        "HEAD",
+        git_dir=git_dir,
+        git_work_tree=git_work_tree,
+    ).stdout.strip()
+    return ResolvedComparison(
+        resolved_base=resolved_base,
+        resolved_head=resolved_head,
+        comparison_mode=MERGE_BASE_TO_WORKING_TREE,
+        include_working_tree=True,
+    )
 
 
 def changed_files(
     repo_root: Path,
-    base_commit: str,
+    comparison: ResolvedComparison,
     *,
     git_dir: Optional[Path] = None,
     git_work_tree: Optional[Path] = None,
     ignored_path_patterns: tuple[str, ...] = DEFAULT_IGNORED_PATH_PATTERNS,
 ) -> list[FileChange]:
+    diff_args = [comparison.resolved_base]
+    if not comparison.include_working_tree:
+        diff_args.append(comparison.resolved_head)
     raw = _git(
         repo_root,
         "diff",
         "--name-status",
         "-z",
         "--find-renames",
-        base_commit,
+        *diff_args,
         git_dir=git_dir,
         git_work_tree=git_work_tree,
     ).stdout
     changes = _parse_name_status(raw)
     tracked_paths = {change.path for change in changes}
 
-    untracked = _git(
-        repo_root,
-        "ls-files",
-        "--others",
-        "--exclude-standard",
-        "-z",
-        git_dir=git_dir,
-        git_work_tree=git_work_tree,
-    ).stdout
-    for raw_path in untracked.split("\0"):
-        if not raw_path:
-            continue
-        if _is_ignored_path(raw_path, ignored_path_patterns=ignored_path_patterns):
-            continue
-        if raw_path in tracked_paths:
-            continue
-        changes.append(
-            FileChange(
-                status="A",
-                path=raw_path,
-                hunks=_whole_file_hunks(repo_root / raw_path),
-                is_untracked=True,
-            ),
-        )
+    if comparison.include_working_tree:
+        untracked = _git(
+            repo_root,
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            git_dir=git_dir,
+            git_work_tree=git_work_tree,
+        ).stdout
+        for raw_path in untracked.split("\0"):
+            if not raw_path:
+                continue
+            if _is_ignored_path(raw_path, ignored_path_patterns=ignored_path_patterns):
+                continue
+            if raw_path in tracked_paths:
+                continue
+            changes.append(
+                FileChange(
+                    status="A",
+                    path=raw_path,
+                    hunks=_whole_file_hunks(repo_root / raw_path),
+                    is_untracked=True,
+                ),
+            )
 
     return sorted(
         (
             _change_with_hunks(
                 repo_root,
-                base_commit,
+                comparison,
                 change,
                 git_dir=git_dir,
                 git_work_tree=git_work_tree,
@@ -86,20 +130,23 @@ def changed_files(
 
 def _attach_hunks(
     repo_root: Path,
-    base_commit: str,
+    comparison: ResolvedComparison,
     change: FileChange,
     *,
     git_dir: Optional[Path] = None,
     git_work_tree: Optional[Path] = None,
 ) -> FileChange:
     diff_path = change.old_path if change.is_deleted else change.path
+    diff_args = [comparison.resolved_base]
+    if not comparison.include_working_tree:
+        diff_args.append(comparison.resolved_head)
     diff_text = _git(
         repo_root,
         "diff",
         "-U0",
         "--no-color",
         "--find-renames",
-        base_commit,
+        *diff_args,
         "--",
         diff_path,
         git_dir=git_dir,
@@ -121,7 +168,7 @@ def _attach_hunks(
 
 def _change_with_hunks(
     repo_root: Path,
-    base_commit: str,
+    comparison: ResolvedComparison,
     change: FileChange,
     *,
     git_dir: Optional[Path] = None,
@@ -131,7 +178,7 @@ def _change_with_hunks(
         return change
     return _attach_hunks(
         repo_root,
-        base_commit,
+        comparison,
         change,
         git_dir=git_dir,
         git_work_tree=git_work_tree,

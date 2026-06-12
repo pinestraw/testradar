@@ -16,6 +16,11 @@ instructions below use a local checkout or a direct GitHub install. The release
 automation is now wired so a tagged `main` release can publish to TestPyPI,
 PyPI, and GitHub Releases once the one-time Trusted Publisher setup is done.
 
+Repository-specific behavior belongs in the consuming repository's config and
+invocation, not in `testradar` core. The package exposes generic policy knobs
+such as diff endpoints, global-pattern overrides, presets, and unclassified-file
+handling; it does not ship per-repo path-to-test mappings.
+
 ## What it does
 
 - Builds and incrementally updates a persisted Python import graph.
@@ -111,6 +116,17 @@ preset = "django"
 ignored_path_patterns = ["coverage", "reports/*", "web/.next/*"]
 ```
 
+If your CI already knows the exact commits being compared, keep the config
+generic and pass the explicit range on the CLI instead of encoding deploy
+branch knowledge into the package:
+
+```bash
+testradar \
+  --diff-base "$DIFF_BASE_SHA" \
+  --diff-head "$DIFF_HEAD_SHA" \
+  select
+```
+
 ### 2. Warm the graph
 
 ```bash
@@ -188,7 +204,9 @@ pytest -p testradar.pytest_plugin --testradar .testradar/targets.txt
 ```bash
 testradar \
   --repo-root "$PWD" \
-  --base-ref origin/staging \
+  --diff-base "$DIFF_BASE_SHA" \
+  --diff-head "$DIFF_HEAD_SHA" \
+  --on-unclassified full-suite \
   select \
   --report reports/testradar-selection.json \
   --targets-file reports/testradar-targets.txt
@@ -276,6 +294,9 @@ The JSON report includes fields such as:
 - `nodeid_target_count`
 - `full_suite`
 - `graph_mode`
+- `resolved_base`
+- `resolved_head`
+- `comparison_mode`
 - `reason_count`
 - `escalation_count`
 
@@ -295,7 +316,7 @@ testradar audit --selected selected.txt --failed failed.txt
 
 - `base_ref`
   Default: `"origin/main"`
-  Git ref used to compute the diff base.
+  Git ref used to compute the merge base for the default working-tree comparison mode.
 
 - `source_roots`
   Default: `["."]`
@@ -325,6 +346,11 @@ testradar audit --selected selected.txt --failed failed.txt
 - `ignored_path_patterns`
   Extra generated or irrelevant paths to ignore beyond the built-in defaults.
 
+- `on_unclassified`
+  Default: `"ignore"`
+  Controls what happens when a changed file matches no policy rule:
+  `ignore`, `full-suite`, or `fail`.
+
 ### Git/worktree override fields
 
 - `git_dir`
@@ -350,7 +376,8 @@ testradar \
   --repo-root /code \
   --git-dir /git-common/worktrees/my-worktree \
   --git-work-tree /code \
-  --base-ref origin/staging \
+  --diff-base "$DIFF_BASE_SHA" \
+  --diff-head "$DIFF_HEAD_SHA" \
   select
 ```
 
@@ -370,6 +397,14 @@ Use this mode when:
 
 ## Selection behavior
 
+`testradar` has two generic comparison modes:
+
+- Default mode: `base_ref` vs the current working tree. This preserves local
+  developer workflows, including staged, unstaged, and untracked changes.
+- Explicit mode: `--diff-base` and `--diff-head`, resolved as
+  `merge-base(diff_base, diff_head)..diff_head`. This is the recommended mode
+  for CI systems that already compute the exact commit pair.
+
 Some important default rules:
 
 - Repo-root `conftest.py` selects the full suite.
@@ -380,6 +415,15 @@ Some important default rules:
 - Source-file edits walk reverse import edges to dependent tests.
 - Parse failures and rename ambiguity widen selection instead of narrowing.
 - `pytest_plugins = [...]` string registrations are treated as dependency edges.
+
+Unclassified files are handled generically:
+
+- `ignore`: preserve today's fail-open behavior
+- `full-suite`: widen to every discovered test file
+- `fail`: exit non-zero and name the offending files
+
+That lets deploy or promotion workflows fail closed without baking any
+repository-specific operational path rules into `testradar`.
 
 For the detailed policy contract, see
 [docs/policy.md](https://github.com/pinestraw/testradar/blob/main/docs/policy.md).
@@ -421,6 +465,7 @@ Typical reasons:
 - `pyproject.toml` or lockfiles changed
 - a parse failure forced safe widening
 - a preset rule marked the change as global
+- `--on-unclassified full-suite` escalated a file with `no-policy-match`
 
 ### `select` seems slower than expected
 

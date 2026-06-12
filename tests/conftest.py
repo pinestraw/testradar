@@ -45,14 +45,14 @@ class RepoHarness:
     def head(self) -> str:
         return self.git("rev-parse", "HEAD").stdout.strip()
 
-    def config(self):
-        return load_config(self.root, base_ref="HEAD")
+    def config(self, **kwargs):
+        return load_config(self.root, base_ref="HEAD", **kwargs)
 
     def index(self):
         return index_repository(self.config())
 
-    def select(self):
-        return select_targets(self.config())
+    def select(self, **kwargs):
+        return select_targets(self.config(**kwargs))
 
     def graph(self):
         return load_graph(self.config().graph_path)

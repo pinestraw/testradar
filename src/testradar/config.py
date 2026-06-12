@@ -28,12 +28,16 @@ DEFAULT_GLOBAL_PATTERNS = (
     "setup.cfg",
     "tox.ini",
 )
+DEFAULT_ON_UNCLASSIFIED = "ignore"
+VALID_ON_UNCLASSIFIED = ("ignore", "full-suite", "fail")
 
 
 @dataclass(frozen=True)
 class TestradarConfig:
     repo_root: Path
     base_ref: str
+    diff_base: Optional[str]
+    diff_head: Optional[str]
     source_roots: tuple[Path, ...]
     graph_path: Path
     git_dir: Optional[Path]
@@ -44,6 +48,7 @@ class TestradarConfig:
     lockfile_patterns: tuple[str, ...]
     global_patterns: tuple[str, ...]
     ignored_path_patterns: tuple[str, ...]
+    on_unclassified: str
 
     def normalized_source_roots(self) -> tuple[str, ...]:
         return tuple(path.relative_to(self.repo_root).as_posix() for path in self.source_roots)
@@ -90,15 +95,36 @@ def _merge_unique(base: tuple[str, ...], extra: tuple[str, ...]) -> tuple[str, .
     return tuple(merged)
 
 
+def _resolve_on_unclassified(raw: Any) -> str:
+    if raw is None:
+        return DEFAULT_ON_UNCLASSIFIED
+    if not isinstance(raw, str):
+        raise ValueError("on_unclassified must be a string")
+    if raw not in VALID_ON_UNCLASSIFIED:
+        valid = ", ".join(VALID_ON_UNCLASSIFIED)
+        raise ValueError(f"on_unclassified must be one of: {valid}")
+    return raw
+
+
 def load_config(
     repo_root: Path,
     *,
     base_ref: Optional[str] = None,
+    diff_base: Optional[str] = None,
+    diff_head: Optional[str] = None,
     graph_path: Optional[str] = None,
     git_dir: Optional[str] = None,
     git_work_tree: Optional[str] = None,
+    on_unclassified: Optional[str] = None,
 ) -> TestradarConfig:
     pyproject_table = _load_table(repo_root / "pyproject.toml")
+    resolved_on_unclassified = _resolve_on_unclassified(
+        on_unclassified if on_unclassified is not None else pyproject_table.get("on_unclassified"),
+    )
+    resolved_diff_base = diff_base
+    resolved_diff_head = diff_head
+    if (resolved_diff_base is None) != (resolved_diff_head is None):
+        raise ValueError("diff_base and diff_head must be provided together")
 
     raw_presets = _ensure_tuple(pyproject_table.get("presets"), field_name="presets")
     preset = pyproject_table.get("preset")
@@ -119,6 +145,8 @@ def load_config(
     return TestradarConfig(
         repo_root=repo_root.resolve(),
         base_ref=base_ref or pyproject_table.get("base_ref", "origin/main"),
+        diff_base=resolved_diff_base,
+        diff_head=resolved_diff_head,
         source_roots=source_roots,
         graph_path=resolved_graph_path,
         git_dir=_resolve_optional_path(
@@ -154,4 +182,5 @@ def load_config(
                 field_name="ignored_path_patterns",
             ),
         ),
+        on_unclassified=resolved_on_unclassified,
     )

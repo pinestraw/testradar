@@ -15,8 +15,11 @@ def test_load_config_uses_defaults_without_pyproject(tmp_path: Path):
     assert config.graph_path == (tmp_path / ".testradar/graph.msgpack").resolve()
     assert config.git_dir is None
     assert config.git_work_tree is None
+    assert config.diff_base is None
+    assert config.diff_head is None
     assert config.test_file_patterns == ("tests.py", "test_*.py", "*_test.py", "*_tests.py")
     assert ".coverage*" in config.ignored_path_patterns
+    assert config.on_unclassified == "ignore"
 
 
 def test_load_config_reads_strings_lists_and_absolute_graph_path(tmp_path: Path):
@@ -36,6 +39,7 @@ test_file_patterns = ["spec_*.py"]
 lockfile_patterns = ["deps.lock"]
 global_patterns = ["project.toml"]
 ignored_path_patterns = ["coverage", "reports/*"]
+on_unclassified = "full-suite"
 """.strip(),
         encoding="utf-8",
     )
@@ -54,17 +58,24 @@ ignored_path_patterns = ["coverage", "reports/*"]
     assert config.global_patterns == ("project.toml",)
     assert config.ignored_path_patterns[:2] == (".git", ".hg")
     assert config.ignored_path_patterns[-2:] == ("coverage", "reports/*")
+    assert config.on_unclassified == "full-suite"
 
 
 def test_load_config_prefers_explicit_git_overrides(tmp_path: Path):
     config = load_config(
         tmp_path,
+        diff_base="origin/staging",
+        diff_head="HEAD",
         git_dir="/git-common/worktrees/feature",
         git_work_tree="/code",
+        on_unclassified="fail",
     )
 
+    assert config.diff_base == "origin/staging"
+    assert config.diff_head == "HEAD"
     assert config.git_dir == Path("/git-common/worktrees/feature")
     assert config.git_work_tree == Path("/code")
+    assert config.on_unclassified == "fail"
 
 
 def test_load_config_rejects_invalid_tool_table(tmp_path: Path):
@@ -90,3 +101,13 @@ def test_ensure_tuple_rejects_invalid_values():
 
 def test_merge_unique_preserves_order_without_duplicates():
     assert _merge_unique(("a", "b"), ("b", "c")) == ("a", "b", "c")
+
+
+def test_load_config_rejects_invalid_on_unclassified(tmp_path: Path):
+    with pytest.raises(ValueError, match="on_unclassified must be one of"):
+        load_config(tmp_path, on_unclassified="unknown")
+
+
+def test_load_config_requires_explicit_diff_pair(tmp_path: Path):
+    with pytest.raises(ValueError, match="diff_base and diff_head must be provided together"):
+        load_config(tmp_path, diff_base="origin/main")

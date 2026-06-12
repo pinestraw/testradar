@@ -43,6 +43,13 @@ Optional Django preset:
 preset = "django"
 ```
 
+Optional fail-closed policy for promotion or deploy jobs:
+
+```toml
+[tool.testradar]
+on_unclassified = "full-suite"
+```
+
 ## Build the graph
 
 ```bash
@@ -55,6 +62,20 @@ testradar index
 testradar select > .testradar/targets.txt
 pytest -p testradar.pytest_plugin --testradar .testradar/targets.txt
 ```
+
+If your CI already knows the exact commit pair being promoted, prefer the
+explicit diff mode:
+
+```bash
+testradar \
+  --diff-base "$DIFF_BASE_SHA" \
+  --diff-head "$DIFF_HEAD_SHA" \
+  --on-unclassified full-suite \
+  select > .testradar/targets.txt
+```
+
+This resolves the comparison as `merge-base(diff_base, diff_head)..diff_head`
+and keeps repo-specific branch logic outside `testradar`.
 
 ## Inspect classification
 

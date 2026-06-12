@@ -40,6 +40,9 @@ def test_models_report_and_invert_helpers(tmp_path):
         targets=[SelectedTarget(target="tests/test_one.py", source=SelectionSource.GLOBAL, reason="global")],
         reasons=["reason"],
         graph_snapshot=snapshot,
+        resolved_base="abc123",
+        resolved_head="def456",
+        comparison_mode="three-dot-merge-base",
         full_suite=True,
         graph_mode="full",
         escalations=["parse-error"],
@@ -47,6 +50,9 @@ def test_models_report_and_invert_helpers(tmp_path):
 
     assert selection_report(result)["targets"][0]["source"] == "global"
     assert selection_report(result)["escalations"] == ["parse-error"]
+    assert selection_report(result)["resolved_base"] == "abc123"
+    assert selection_report(result)["resolved_head"] == "def456"
+    assert selection_report(result)["comparison_mode"] == "three-dot-merge-base"
     assert selection_report(result)["target_count"] == 1
     assert selection_report(result)["file_target_count"] == 1
     assert selection_report(result)["nodeid_target_count"] == 0

@@ -2,24 +2,30 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from testradar.audit import calculate_miss_rate, load_node_set
 from testradar.config import load_config
 from testradar.report import selection_report
-from testradar.select import index_repository, select_targets
+from testradar.select import UnclassifiedChangeError, index_repository, select_targets
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if (args.diff_base is None) != (args.diff_head is None):
+        parser.error("--diff-base and --diff-head must be passed together")
     repo_root = Path(args.repo_root).resolve()
     config = load_config(
         repo_root,
         base_ref=args.base_ref,
+        diff_base=args.diff_base,
+        diff_head=args.diff_head,
         graph_path=args.graph_path,
         git_dir=args.git_dir,
         git_work_tree=args.git_work_tree,
+        on_unclassified=args.on_unclassified,
     )
     return args.handler(args, config)
 
@@ -28,9 +34,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="testradar")
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--base-ref", default=None)
+    parser.add_argument("--diff-base", default=None)
+    parser.add_argument("--diff-head", default=None)
     parser.add_argument("--graph-path", default=None)
     parser.add_argument("--git-dir", default=None)
     parser.add_argument("--git-work-tree", default=None)
+    parser.add_argument("--on-unclassified", default=None, choices=("ignore", "full-suite", "fail"))
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -66,17 +75,19 @@ def _handle_index(args, config) -> int:
 
 def _handle_classify(args, config) -> int:
     from testradar.classify import classify_changes
-    from testradar.gitdiff import changed_files, resolve_base_commit
+    from testradar.gitdiff import changed_files, resolve_comparison
 
-    base_commit = resolve_base_commit(
+    comparison = resolve_comparison(
         config.repo_root,
         config.base_ref,
+        diff_base=config.diff_base,
+        diff_head=config.diff_head,
         git_dir=config.git_dir,
         git_work_tree=config.git_work_tree,
     )
     changes = changed_files(
         config.repo_root,
-        base_commit,
+        comparison,
         git_dir=config.git_dir,
         git_work_tree=config.git_work_tree,
     )
@@ -100,7 +111,11 @@ def _handle_classify(args, config) -> int:
 
 
 def _handle_select(args, config) -> int:
-    result = select_targets(config)
+    try:
+        result = select_targets(config)
+    except UnclassifiedChangeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     report = selection_report(result)
     if args.report:
         report_path = Path(args.report)

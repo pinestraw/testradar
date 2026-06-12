@@ -12,6 +12,7 @@ from testradar.gitdiff import (
     _parse_name_status,
     _whole_file_hunks,
     changed_files,
+    resolve_comparison,
 )
 from testradar.models import FileChange, HunkRange
 
@@ -41,15 +42,21 @@ def test_attach_hunks_falls_back_for_rename_and_add(monkeypatch, tmp_path):
     target = tmp_path / "renamed.py"
     target.write_text("VALUE = 1\n", encoding="utf-8")
     monkeypatch.setattr("testradar.gitdiff._git", lambda *args, **kwargs: SimpleNamespace(stdout=""))
+    comparison = SimpleNamespace(
+        resolved_base="base",
+        resolved_head="head",
+        comparison_mode="merge-base-to-working-tree",
+        include_working_tree=True,
+    )
 
     renamed = _attach_hunks(
         tmp_path,
-        "base",
+        comparison,
         FileChange(status="R", path="renamed.py", old_path="old.py"),
     )
     added = _attach_hunks(
         tmp_path,
-        "base",
+        comparison,
         FileChange(status="A", path="renamed.py"),
     )
 
@@ -73,8 +80,16 @@ def test_changed_files_handles_duplicate_tracked_and_untracked(monkeypatch, tmp_
         raise AssertionError(args)
 
     monkeypatch.setattr("testradar.gitdiff._git", fake_git)
-
-    changes = changed_files(tmp_path, "base", ignored_path_patterns=("new.py", ".testradar"))
+    changes = changed_files(
+        tmp_path,
+        SimpleNamespace(
+            resolved_base="base",
+            resolved_head="head",
+            comparison_mode="merge-base-to-working-tree",
+            include_working_tree=True,
+        ),
+        ignored_path_patterns=("new.py", ".testradar"),
+    )
 
     assert [(item.status, item.path, item.is_untracked) for item in changes] == [("M", "tracked.py", False)]
 
@@ -120,3 +135,32 @@ def test_git_raises_linked_worktree_hint_for_missing_gitdir(monkeypatch, tmp_pat
 
     with pytest.raises(RuntimeError, match="linked worktree"):
         _git(tmp_path, "merge-base", "origin/main", "HEAD")
+
+
+def test_explicit_diff_range_uses_merge_base_for_diverged_branches(repo):
+    repo.write("README.md", "base\n")
+    repo.commit_all()
+    merge_base = repo.head()
+
+    repo.git("checkout", "-b", "release")
+    repo.write("ops/release.txt", "release-only\n")
+    repo.commit_all("release change")
+    release_head = repo.head()
+
+    repo.git("checkout", "main")
+    repo.write("app/service.py", "VALUE = 1\n")
+    repo.commit_all("main change")
+    main_head = repo.head()
+
+    comparison = resolve_comparison(
+        repo.root,
+        "HEAD",
+        diff_base=release_head,
+        diff_head=main_head,
+    )
+    changes = changed_files(repo.root, comparison, ignored_path_patterns=())
+
+    assert comparison.resolved_base == merge_base
+    assert comparison.resolved_head == main_head
+    assert comparison.comparison_mode == "three-dot-merge-base"
+    assert [(item.status, item.path) for item in changes] == [("A", "app/service.py")]

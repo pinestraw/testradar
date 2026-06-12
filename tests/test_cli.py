@@ -18,7 +18,7 @@ def test_package_metadata_and_main_module(monkeypatch):
         main_module.run()
 
     assert exc_info.value.code == 7
-    assert testradar.__version__ == "0.1.0"
+    assert testradar.__version__ == "0.2.0"
     assert testradar.__all__ == ["__version__"]
 
 
@@ -29,7 +29,7 @@ def test_runtime_imports_cover_entry_modules(monkeypatch):
     plugin = reload(import_module("testradar.pytest_plugin"))
     main_module = import_module("testradar.__main__")
 
-    assert package.__version__ == "0.1.0"
+    assert package.__version__ == "0.2.0"
     assert callable(plugin.pytest_addoption)
 
     main_path = Path(main_module.__file__)
@@ -107,6 +107,9 @@ def test_main_runs_select_with_report_and_json(repo, capsys):
     report_payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert report_payload["targets"][0]["target"] == "tests/test_service.py"
     assert report_payload["target_count"] == 1
+    assert report_payload["comparison_mode"] == "merge-base-to-working-tree"
+    assert report_payload["resolved_base"]
+    assert report_payload["resolved_head"]
 
     assert cli.main(["--repo-root", str(repo.root), "select", "--json"]) == 0
     json_output = json.loads(capsys.readouterr().out)
@@ -161,14 +164,50 @@ def test_main_passes_git_overrides_to_load_config(monkeypatch, tmp_path: Path):
         [
             "--repo-root",
             str(tmp_path),
+            "--diff-base",
+            "origin/main",
+            "--diff-head",
+            "HEAD",
             "--git-dir",
             "/git-common/worktrees/feature",
             "--git-work-tree",
             "/code",
+            "--on-unclassified",
+            "full-suite",
             "index",
         ],
     ) == 0
 
     assert captured["repo_root"] == tmp_path.resolve()
+    assert captured["diff_base"] == "origin/main"
+    assert captured["diff_head"] == "HEAD"
     assert captured["git_dir"] == "/git-common/worktrees/feature"
     assert captured["git_work_tree"] == "/code"
+    assert captured["on_unclassified"] == "full-suite"
+
+
+def test_main_select_fails_closed_for_unclassified_changes(repo, capsys):
+    repo.write("tests/test_one.py", "def test_one():\n    assert True\n")
+    repo.commit_all()
+    repo.write(".github/workflows/deploy.yml", "name: deploy\n")
+
+    assert cli.main(
+        [
+            "--repo-root",
+            str(repo.root),
+            "--on-unclassified",
+            "fail",
+            "select",
+        ],
+    ) == 1
+
+    captured = capsys.readouterr()
+    assert "Unclassified changed files require a policy decision" in captured.err
+    assert ".github/workflows/deploy.yml" in captured.err
+
+
+def test_main_requires_explicit_diff_pair(repo):
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["--repo-root", str(repo.root), "--diff-base", "origin/main", "select"])
+
+    assert exc_info.value.code == 2

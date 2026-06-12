@@ -119,6 +119,9 @@ class SelectionResult:
     targets: list[SelectedTarget]
     reasons: list[str]
     graph_snapshot: GraphSnapshot
+    resolved_base: str
+    resolved_head: str
+    comparison_mode: str
     full_suite: bool = False
     graph_mode: str = "unchanged"
     escalations: list[str] = field(default_factory=list)
@@ -151,3 +154,11 @@ class AuditResult:
 
 def relative_to_root(root: Path, path: Path) -> str:
     return path.relative_to(root).as_posix()
+
+
+@dataclass(frozen=True)
+class ResolvedComparison:
+    resolved_base: str
+    resolved_head: str
+    comparison_mode: str
+    include_working_tree: bool = False

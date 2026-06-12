@@ -151,6 +151,33 @@ def test_root_conftest_selects_full_suite(repo):
     assert result.target_strings() == ["tests/test_one.py", "tests/test_two.py"]
 
 
+def test_unclassified_change_is_ignored_by_default(repo):
+    repo.write("tests/test_one.py", "def test_one():\n    assert True\n")
+    repo.write("tests/test_two.py", "def test_two():\n    assert True\n")
+    repo.commit_all()
+    repo.write(".github/workflows/deploy.yml", "name: deploy\n")
+
+    result = repo.select()
+
+    assert result.full_suite is False
+    assert result.target_strings() == []
+    assert result.escalations == []
+
+
+def test_unclassified_change_can_escalate_to_full_suite(repo):
+    repo.write("tests/test_one.py", "def test_one():\n    assert True\n")
+    repo.write("tests/test_two.py", "def test_two():\n    assert True\n")
+    repo.commit_all()
+    repo.write(".github/workflows/deploy.yml", "name: deploy\n")
+
+    result = repo.select(on_unclassified="full-suite")
+
+    assert result.full_suite is True
+    assert result.target_strings() == ["tests/test_one.py", "tests/test_two.py"]
+    assert result.escalations == [".github/workflows/deploy.yml: unclassified-change -> full-suite"]
+    assert result.reasons == [".github/workflows/deploy.yml: no-policy-match"]
+
+
 def test_ast_parse_error_falls_back_to_known_dependents(repo):
     repo.write("app/__init__.py", "")
     repo.write("app/service.py", "VALUE = 1\n")

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from testradar.classify import classify_changes
 from testradar.config import TestradarConfig
-from testradar.gitdiff import changed_files, resolve_base_commit
+from testradar.gitdiff import changed_files, resolve_comparison
 from testradar.graph.build import update_graph_incremental
 from testradar.graph.invert import all_test_files, app_tests, dependent_tests, tests_under
 from testradar.graph.store import load_graph, save_graph
@@ -24,6 +24,11 @@ SOURCE_PRIORITY = {
     SelectionSource.DYNAMIC: 1,
     SelectionSource.GLOBAL: 2,
 }
+UNCLASSIFIED_ESCALATION_REASON = "unclassified-change"
+
+
+class UnclassifiedChangeError(RuntimeError):
+    pass
 
 
 def index_repository(config: TestradarConfig) -> tuple[GraphSnapshot, str]:
@@ -35,15 +40,17 @@ def index_repository(config: TestradarConfig) -> tuple[GraphSnapshot, str]:
 
 def select_targets(config: TestradarConfig) -> SelectionResult:
     previous = load_graph(config.graph_path)
-    base_commit = resolve_base_commit(
+    comparison = resolve_comparison(
         config.repo_root,
         config.base_ref,
+        diff_base=config.diff_base,
+        diff_head=config.diff_head,
         git_dir=config.git_dir,
         git_work_tree=config.git_work_tree,
     )
     changes = changed_files(
         config.repo_root,
-        base_commit,
+        comparison,
         git_dir=config.git_dir,
         git_work_tree=config.git_work_tree,
         ignored_path_patterns=config.ignored_path_patterns,
@@ -51,19 +58,31 @@ def select_targets(config: TestradarConfig) -> SelectionResult:
     current, graph_mode = update_graph_incremental(config, previous)
     save_graph(config.graph_path, current)
 
+    classifications = list(classify_changes(config, changes))
+    unclassified_changes = [(change, classification) for change, classification in zip(changes, classifications) if classification.scope == ChangeScope.IGNORE]
+    if config.on_unclassified == "fail" and unclassified_changes:
+        paths = ", ".join(change.path for change, _classification in unclassified_changes)
+        raise UnclassifiedChangeError(f"Unclassified changed files require a policy decision: {paths}")
+
     targets: dict[str, SelectedTarget] = {}
     reasons: list[str] = []
     escalations: list[str] = []
     full_suite = False
+    should_record_full_suite = False
 
-    for change, classification in zip(changes, classify_changes(config, changes)):
+    for change, classification in zip(changes, classifications):
         if classification.scope == ChangeScope.IGNORE:
+            if config.on_unclassified == "full-suite":
+                reasons.append(f"{change.path}: {classification.reason}")
+                escalations.append(f"{change.path}: {UNCLASSIFIED_ESCALATION_REASON} -> full-suite")
+                full_suite = True
+                should_record_full_suite = True
             continue
 
         if classification.scope == ChangeScope.GLOBAL:
-            full_suite = True
             reasons.append(f"{change.path}: {classification.reason}")
-            _record_test_files(targets, all_test_files(current), SelectionSource.GLOBAL, classification.reason)
+            full_suite = True
+            should_record_full_suite = True
             continue
 
         if classification.scope == ChangeScope.TEST:
@@ -110,10 +129,16 @@ def select_targets(config: TestradarConfig) -> SelectionResult:
             )
             continue
 
+    if should_record_full_suite:
+        _record_test_files(targets, all_test_files(current), SelectionSource.GLOBAL, "full-suite")
+
     return SelectionResult(
         targets=sorted(targets.values(), key=lambda item: item.target),
         reasons=reasons,
         graph_snapshot=current,
+        resolved_base=comparison.resolved_base,
+        resolved_head=comparison.resolved_head,
+        comparison_mode=comparison.comparison_mode,
         full_suite=full_suite,
         graph_mode=graph_mode,
         escalations=escalations,
