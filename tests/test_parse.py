@@ -59,7 +59,7 @@ def test_parse_python_source_preserves_unrelated_syntax_errors():
 def test_parse_python_source_reraises_when_sanitizer_returns_same_source(monkeypatch):
     monkeypatch.setattr(parse_module, "_sanitize_legacy_except_syntax", lambda source: source)
 
-    with pytest.raises(SyntaxError, match="multiple exception types must be parenthesized"):
+    with pytest.raises(SyntaxError) as exc_info:
         parse_python_source(
             textwrap.dedent(
                 """
@@ -72,12 +72,14 @@ def test_parse_python_source_reraises_when_sanitizer_returns_same_source(monkeyp
             ),
             filename="demo.py",
         )
+    assert exc_info.value.filename == "demo.py"
+    assert exc_info.value.lineno == 5
 
 
 def test_parse_python_source_reraises_original_when_sanitized_code_is_still_invalid(monkeypatch):
     monkeypatch.setattr(parse_module, "_sanitize_legacy_except_syntax", lambda _source: "def broken(:\n")
 
-    with pytest.raises(SyntaxError, match="multiple exception types must be parenthesized"):
+    with pytest.raises(SyntaxError) as exc_info:
         parse_python_source(
             textwrap.dedent(
                 """
@@ -90,3 +92,5 @@ def test_parse_python_source_reraises_original_when_sanitized_code_is_still_inva
             ),
             filename="demo.py",
         )
+    assert exc_info.value.filename == "demo.py"
+    assert exc_info.value.lineno == 5

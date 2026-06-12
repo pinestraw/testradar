@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2 - 2026-06-11
+
+- make legacy `except Foo, Bar:` sanitization work across Python 3.9 through 3.13 instead of depending on version-specific `SyntaxError` text
+- make release/parse tests version-neutral where interpreter error wording differs
+
 ## 0.2.1 - 2026-06-11
 
 - fix Python 3.9 and 3.10 release-metadata tests by using the packaged `tomli` fallback instead of importing `tomllib` unconditionally

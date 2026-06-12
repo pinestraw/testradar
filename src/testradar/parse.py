@@ -11,8 +11,6 @@ def parse_python_source(source: str, *, filename: str) -> ast.AST:
     try:
         return ast.parse(source, filename=filename)
     except SyntaxError as exc:
-        if "multiple exception types must be parenthesized" not in str(exc):
-            raise
         sanitized = _sanitize_legacy_except_syntax(source)
         if sanitized == source:
             raise
