@@ -18,7 +18,7 @@ def test_package_metadata_and_main_module(monkeypatch):
         main_module.run()
 
     assert exc_info.value.code == 7
-    assert testradar.__version__ == "0.2.0"
+    assert testradar.__version__ == "0.2.1"
     assert testradar.__all__ == ["__version__"]
 
 
@@ -29,7 +29,7 @@ def test_runtime_imports_cover_entry_modules(monkeypatch):
     plugin = reload(import_module("testradar.pytest_plugin"))
     main_module = import_module("testradar.__main__")
 
-    assert package.__version__ == "0.2.0"
+    assert package.__version__ == "0.2.1"
     assert callable(plugin.pytest_addoption)
 
     main_path = Path(main_module.__file__)

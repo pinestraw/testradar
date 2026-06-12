@@ -6,7 +6,7 @@ The intended release flow is:
 
 1. update the package version in `src/testradar/__init__.py`
 2. merge to `main`
-3. push a version tag like `v0.2.0`
+3. push a version tag like `vX.Y.Z`
 4. let GitHub Actions build the distributions
 5. publish to TestPyPI
 6. publish to PyPI after TestPyPI succeeds
@@ -75,8 +75,8 @@ The release workflow verifies that the Git tag matches `src/testradar/__init__.p
 
 Example:
 
-- `src/testradar/__init__.py`: `__version__ = "0.2.0"`
-- tag: `v0.2.0`
+- `src/testradar/__init__.py`: `__version__ = "X.Y.Z"`
+- tag: `vX.Y.Z`
 
 If they do not match, the release workflow fails before uploading anything.
 
@@ -95,8 +95,8 @@ git pull --ff-only
 # edit src/testradar/__init__.py
 make release-check
 git add src/testradar/__init__.py
-git commit -m "Release 0.2.0"
-git tag v0.2.0
+git commit -m "Release X.Y.Z"
+git tag vX.Y.Z
 git push origin main --follow-tags
 ```
 
@@ -154,4 +154,4 @@ This is useful when:
 
 Be aware that package indexes do not allow overwriting an existing version. If a
 version already exists on TestPyPI, use a new pre-release version such as
-`0.2.0rc1` or `0.2.0.dev1`.
+`X.Y.Zrc1` or `X.Y.Z.dev1`.

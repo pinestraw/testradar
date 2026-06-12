@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 - 2026-06-11
+
+- fix Python 3.9 and 3.10 release-metadata tests by using the packaged `tomli` fallback instead of importing `tomllib` unconditionally
+
 ## 0.2.0 - 2026-06-11
 
 - add explicit `--diff-base` and `--diff-head` support with three-dot merge-base semantics for CI and promotion diffs
